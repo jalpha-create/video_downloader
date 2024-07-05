@@ -1,17 +1,19 @@
 import streamlit as st
 from pytube import YouTube
 import os
-from tkinter import Tk
-from tkinter.filedialog import askdirectory
 from moviepy.editor import AudioFileClip
+from pathlib import Path
 
-def download_video(url, stream, save_path):
-    return stream.download(output_path=save_path)
+def download_video(stream, output_path):
+    return stream.download(output_path=output_path)
 
 def convert_to_mp3(mp4_path, mp3_path):
     audio_clip = AudioFileClip(mp4_path)
     audio_clip.write_audiofile(mp3_path)
     audio_clip.close()
+
+# ユーザーのダウンロードフォルダを取得
+download_folder = str(Path.home() / "Downloads")
 
 st.title("YouTube Video Downloader")
 
@@ -22,33 +24,31 @@ if url:
     st.subheader(f"Title: {yt.title}")
     st.image(yt.thumbnail_url, width=300)
 
-    video_streams = yt.streams.filter(progressive=True, file_extension='mp4').all()
-    audio_streams = yt.streams.filter(only_audio=True, file_extension='mp4').all()
+    video_streams = yt.streams.filter(file_extension='mp4', adaptive=True).all()
+    audio_streams = yt.streams.filter(file_extension='mp4', only_audio=True).all()
 
     stream_options = [(stream.resolution or "Audio Only", stream) for stream in video_streams + audio_streams]
     stream_dict = {f"{res} - {stream.mime_type}": stream for res, stream in stream_options}
     
-    selected_option = st.selectbox("Select resolution or audio", list(stream_dict.keys()))
-    selected_stream = stream_dict[selected_option]
+    selected_options = st.multiselect("Select resolutions or audio", list(stream_dict.keys()))
 
     if st.button("Download"):
-        root = Tk()
-        root.withdraw()  # Hide the main window
-        save_path = askdirectory()  # Open the directory chooser dialog
-        root.destroy()
-        
-        if save_path:
+        if selected_options:
             with st.spinner("Downloading..."):
-                filepath = download_video(url, selected_stream, save_path)
-                if filepath:
-                    if "audio" in selected_stream.mime_type:
-                        mp3_path = os.path.splitext(filepath)[0] + ".mp3"
-                        convert_to_mp3(filepath, mp3_path)
-                        os.remove(filepath)  # Remove the original mp4 file
-                        filepath = mp3_path
-                    st.success("Download complete!")
-                    st.write("Downloaded file:", filepath)
-                    with open(filepath, "rb") as file:
-                        st.download_button("Download File", data=file, file_name=os.path.basename(filepath), mime="audio/mp3" if "audio" in selected_stream.mime_type else "video/mp4")
+                for option in selected_options:
+                    selected_stream = stream_dict[option]
+                    filepath = download_video(selected_stream, output_path=download_folder)
+                    if filepath:
+                        if "audio" in selected_stream.mime_type:
+                            mp3_path = os.path.splitext(filepath)[0] + ".mp3"
+                            convert_to_mp3(filepath, mp3_path)
+                            os.remove(filepath)  # Remove the original mp4 file
+                            filepath = mp3_path
+                        st.success(f"Download complete for {option}!")
+                        st.write("Downloaded file:", filepath)
+                        with open(filepath, "rb") as file:
+                            st.download_button("Download File", data=file, file_name=os.path.basename(filepath), mime="audio/mp3" if "audio" in selected_stream.mime_type else "video/mp4")
         else:
-            st.error("No directory selected.")
+            st.error("No resolution or audio selected.")
+else:
+    st.error("Please enter a valid YouTube URL.")
