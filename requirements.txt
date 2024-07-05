@@ -1,4 +1,6 @@
 streamlit
+pytube
+moviepy
 requests
 beautifulsoup4
 pandas
