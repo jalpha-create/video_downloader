@@ -5,3 +5,7 @@
 ## 必要なライブラリ
 
 以下のコマンドで必要なライブラリをインストールしてください。
+
+`pip install streamlit pytube`
+
+`pip install moviepy`
