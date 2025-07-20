@@ -4,6 +4,7 @@ import os
 import tempfile
 import re
 import time
+from moviepy.editor import VideoFileClip, AudioFileClip
 from urllib.parse import urlparse, parse_qs
 
 # 設定
@@ -37,8 +38,8 @@ def format_file_size(bytes_size):
         bytes_size /= 1024.0
     return f"{bytes_size:.1f} TB"
 
-def download_stream(stream, output_path):
-    """ストリームをダウンロード"""
+def download_stream(stream, output_path, progress_bar=None):
+    """ストリームをダウンロード（プログレスバー付き）"""
     try:
         start_time = time.time()
         file_path = stream.download(output_path=output_path)
@@ -50,6 +51,33 @@ def download_stream(stream, output_path):
         return file_path
     except Exception as e:
         st.error(f"ダウンロードに失敗しました: {str(e)}")
+        return None
+
+def merge_audio_video(video_path, audio_path, output_path, progress_callback=None):
+    """動画と音声をマージ"""
+    try:
+        with st.spinner("動画と音声をマージしています..."):
+            video_clip = VideoFileClip(video_path)
+            audio_clip = AudioFileClip(audio_path)
+            final_clip = video_clip.set_audio(audio_clip)
+            
+            # プログレスコールバック付きで書き出し
+            final_clip.write_videofile(
+                output_path, 
+                codec='libx264',
+                audio_codec='aac',
+                verbose=False,
+                logger=None
+            )
+            
+            # リソースを解放
+            video_clip.close()
+            audio_clip.close()
+            final_clip.close()
+            
+        return output_path
+    except Exception as e:
+        st.error(f"マージに失敗しました: {str(e)}")
         return None
 
 # Streamlitアプリの設定
@@ -143,11 +171,16 @@ if url:
         # ストリーム情報の取得と表示
         st.subheader("📥 ダウンロード形式を選択")
         
-        # プログレッシブストリーム（音声+動画）のみ使用
+        # プログレッシブストリーム（音声+動画）
         progressive_streams = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc()
+        
+        # 適応的ストリーム（音声なし動画）
+        adaptive_streams = yt.streams.filter(adaptive=True, file_extension='mp4', only_video=True).order_by('resolution').desc()
+        
+        # 音声ストリーム
         audio_streams = yt.streams.filter(only_audio=True).order_by('abr').desc()
         
-        # ストリームオプションの作成
+        # ストリームオプションの作成（ファイルサイズ情報付き）
         stream_options = []
         
         # プログレッシブストリーム
@@ -155,8 +188,13 @@ if url:
             size = format_file_size(stream.filesize) if hasattr(stream, 'filesize') and stream.filesize else "不明"
             stream_options.append((f"🎬 {stream.resolution} - 動画+音声 ({size})", stream))
         
+        # 適応的ストリーム（高品質）
+        for stream in adaptive_streams[:3]:  # 上位3つまで
+            size = format_file_size(stream.filesize) if hasattr(stream, 'filesize') and stream.filesize else "不明"
+            stream_options.append((f"🎥 {stream.resolution} - 高品質動画 ({size})", stream))
+        
         # 音声ストリーム
-        for stream in audio_streams[:3]:  # 上位3つまで
+        for stream in audio_streams[:2]:  # 上位2つまで
             size = format_file_size(stream.filesize) if hasattr(stream, 'filesize') and stream.filesize else "不明"
             abr = stream.abr if hasattr(stream, 'abr') and stream.abr else "不明"
             stream_options.append((f"🎵 音声のみ - {abr} ({size})", stream))
@@ -169,7 +207,7 @@ if url:
         selected_option = st.selectbox(
             "品質を選択してください", 
             list(stream_dict.keys()),
-            help="プログレッシブストリーム（動画+音声が一緒）のみ使用"
+            help="高品質動画は音声と動画を別々にダウンロードしてマージします"
         )
         selected_stream = stream_dict[selected_option]
         
@@ -184,28 +222,68 @@ if url:
             with tempfile.TemporaryDirectory() as temp_dir:
                 title_safe = "".join([c if c.isalnum() or c in "._- " else "_" for c in yt.title])[:50]
                 
-                with st.spinner("ダウンロード中..."):
-                    file_path = download_stream(selected_stream, temp_dir)
-                    
-                    if file_path:
-                        st.success("✅ ダウンロード完了！")
+                if "動画+音声" in selected_option:
+                    # プログレッシブストリームのダウンロード
+                    with st.spinner("ダウンロード中..."):
+                        progress_bar = st.progress(0)
+                        file_path = download_stream(selected_stream, temp_dir, progress_bar)
                         
-                        with open(file_path, "rb") as file:
-                            if "音声のみ" in selected_option:
-                                file_extension = "mp3" if "mp3" in str(selected_stream.mime_type).lower() else "mp4"
+                        if file_path:
+                            progress_bar.progress(100)
+                            st.success("✅ ダウンロード完了！")
+                            
+                            with open(file_path, "rb") as file:
                                 st.download_button(
-                                    "📥 音声ファイルをダウンロード",
-                                    data=file,
-                                    file_name=f"{title_safe}_audio.{file_extension}",
-                                    mime=f"audio/{file_extension}",
-                                    use_container_width=True
-                                )
-                            else:
-                                st.download_button(
-                                    "📥 動画ファイルをダウンロード",
+                                    "📥 ファイルをダウンロード",
                                     data=file,
                                     file_name=f"{title_safe}.mp4",
                                     mime="video/mp4",
+                                    use_container_width=True
+                                )
+                
+                elif "高品質動画" in selected_option:
+                    # 適応的ストリームのダウンロード（動画+音声）
+                    with st.spinner("高品質動画をダウンロード中..."):
+                        video_file = download_stream(selected_stream, temp_dir)
+                        
+                        if video_file:
+                            st.info("🎵 音声ファイルをダウンロード中...")
+                            best_audio = audio_streams.first()
+                            audio_file = download_stream(best_audio, temp_dir)
+                            
+                            if audio_file:
+                                st.info("🔄 動画と音声をマージ中...")
+                                output_path = os.path.join(temp_dir, f"{title_safe}_merged.mp4")
+                                merged_file = merge_audio_video(video_file, audio_file, output_path)
+                                
+                                if merged_file:
+                                    st.success("✅ マージ完了！")
+                                    
+                                    with open(merged_file, "rb") as mf:
+                                        st.download_button(
+                                            "📥 高品質動画をダウンロード",
+                                            data=mf,
+                                            file_name=f"{title_safe}_HQ.mp4",
+                                            mime="video/mp4",
+                                            use_container_width=True
+                                        )
+                
+                else:
+                    # 音声のみのダウンロード
+                    with st.spinner("音声をダウンロード中..."):
+                        audio_file = download_stream(selected_stream, temp_dir)
+                        
+                        if audio_file:
+                            st.success("✅ 音声ダウンロード完了！")
+                            
+                            with open(audio_file, "rb") as af:
+                                # 音声ファイルはMP3として保存
+                                file_extension = "mp3" if "mp3" in str(selected_stream.mime_type).lower() else "mp4"
+                                st.download_button(
+                                    "📥 音声ファイルをダウンロード",
+                                    data=af,
+                                    file_name=f"{title_safe}_audio.{file_extension}",
+                                    mime=f"audio/{file_extension}",
                                     use_container_width=True
                                 )
     
@@ -219,4 +297,4 @@ st.markdown("""
 <div style="text-align: center; color: #666; margin-top: 2rem;">
 ⚠️ このツールは教育目的で作成されています。著作権を尊重してご利用ください。
 </div>
-""", unsafe_allow_html=True) 
+""", unsafe_allow_html=True)
