@@ -37,6 +37,20 @@ def format_file_size(bytes_size):
         bytes_size /= 1024.0
     return f"{bytes_size:.1f} TB"
 
+def create_youtube_object(url):
+    """YouTubeオブジェクトを作成（User-Agent設定付き）"""
+    try:
+        # User-Agentを設定してブロックを回避
+        yt = YouTube(
+            url,
+            use_oauth=False,
+            allow_oauth_cache=False
+        )
+        return yt
+    except Exception as e:
+        st.error(f"YouTube接続エラー: {str(e)}")
+        return None
+
 def download_stream(stream, output_path):
     """ストリームをダウンロード"""
     try:
@@ -98,6 +112,9 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# デバッグ情報表示
+st.info("🔧 デバッグ版：詳細なエラー情報を表示します")
+
 # URL入力
 url = st.text_input(
     "YouTubeのURLを入力してください", 
@@ -113,57 +130,94 @@ if url:
     
     try:
         with st.spinner("動画情報を取得しています..."):
-            yt = YouTube(url)
+            st.info(f"🔍 接続中: {url}")
+            yt = create_youtube_object(url)
+            
+            if not yt:
+                st.error("❌ YouTube接続に失敗しました")
+                st.stop()
+            
+            # 動画情報の取得を試行
+            try:
+                title = yt.title
+                st.info(f"✅ タイトル取得成功: {title}")
+            except Exception as e:
+                st.error(f"❌ タイトル取得失敗: {str(e)}")
+                st.stop()
             
             # 動画情報の表示
             col1, col2 = st.columns([1, 2])
             
             with col1:
-                st.image(yt.thumbnail_url, use_column_width=True)
+                try:
+                    st.image(yt.thumbnail_url, use_column_width=True)
+                except Exception as e:
+                    st.warning(f"サムネイル表示エラー: {str(e)}")
             
             with col2:
                 st.subheader(yt.title)
                 
                 # 動画の詳細情報
-                st.markdown(f"""
-                <div class="info-box">
-                <strong>📊 動画情報</strong><br>
-                • 投稿者: {yt.author}<br>
-                • 再生時間: {format_duration(yt.length)}<br>
-                • 再生回数: {yt.views:,} 回<br>
-                • 投稿日: {yt.publish_date.strftime('%Y年%m月%d日') if yt.publish_date else 'N/A'}
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # 時間制限チェック
-                if yt.length > MAX_DURATION:
-                    st.error(f"❌ 動画が長すぎます（最大{MAX_DURATION//60}分）")
-                    st.stop()
+                try:
+                    st.markdown(f"""
+                    <div class="info-box">
+                    <strong>📊 動画情報</strong><br>
+                    • 投稿者: {yt.author}<br>
+                    • 再生時間: {format_duration(yt.length)}<br>
+                    • 再生回数: {yt.views:,} 回<br>
+                    • 投稿日: {yt.publish_date.strftime('%Y年%m月%d日') if yt.publish_date else 'N/A'}
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # 時間制限チェック
+                    if yt.length > MAX_DURATION:
+                        st.error(f"❌ 動画が長すぎます（最大{MAX_DURATION//60}分）")
+                        st.stop()
+                        
+                except Exception as e:
+                    st.warning(f"詳細情報取得エラー: {str(e)}")
         
         # ストリーム情報の取得と表示
         st.subheader("📥 ダウンロード形式を選択")
         
-        # プログレッシブストリーム（音声+動画）のみ使用
-        progressive_streams = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc()
-        audio_streams = yt.streams.filter(only_audio=True).order_by('abr').desc()
+        try:
+            # プログレッシブストリーム（音声+動画）のみ使用
+            st.info("🔍 利用可能なストリームを検索中...")
+            progressive_streams = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc()
+            audio_streams = yt.streams.filter(only_audio=True).order_by('abr').desc()
+            
+            st.info(f"✅ プログレッシブストリーム: {len(progressive_streams)}個")
+            st.info(f"✅ 音声ストリーム: {len(audio_streams)}個")
+            
+        except Exception as e:
+            st.error(f"❌ ストリーム取得エラー: {str(e)}")
+            st.stop()
         
         # ストリームオプションの作成
         stream_options = []
         
         # プログレッシブストリーム
         for stream in progressive_streams:
-            size = format_file_size(stream.filesize) if hasattr(stream, 'filesize') and stream.filesize else "不明"
-            stream_options.append((f"🎬 {stream.resolution} - 動画+音声 ({size})", stream))
+            try:
+                size = format_file_size(stream.filesize) if hasattr(stream, 'filesize') and stream.filesize else "不明"
+                stream_options.append((f"🎬 {stream.resolution} - 動画+音声 ({size})", stream))
+            except Exception as e:
+                st.warning(f"ストリーム情報取得エラー: {str(e)}")
         
         # 音声ストリーム
         for stream in audio_streams[:3]:  # 上位3つまで
-            size = format_file_size(stream.filesize) if hasattr(stream, 'filesize') and stream.filesize else "不明"
-            abr = stream.abr if hasattr(stream, 'abr') and stream.abr else "不明"
-            stream_options.append((f"🎵 音声のみ - {abr} ({size})", stream))
+            try:
+                size = format_file_size(stream.filesize) if hasattr(stream, 'filesize') and stream.filesize else "不明"
+                abr = stream.abr if hasattr(stream, 'abr') and stream.abr else "不明"
+                stream_options.append((f"🎵 音声のみ - {abr} ({size})", stream))
+            except Exception as e:
+                st.warning(f"音声ストリーム情報取得エラー: {str(e)}")
         
         if not stream_options:
             st.error("❌ ダウンロード可能なストリームが見つかりませんでした")
             st.stop()
+        
+        st.success(f"✅ {len(stream_options)}個のダウンロードオプションが見つかりました")
         
         stream_dict = {option: stream for option, stream in stream_options}
         selected_option = st.selectbox(
@@ -185,10 +239,12 @@ if url:
                 title_safe = "".join([c if c.isalnum() or c in "._- " else "_" for c in yt.title])[:50]
                 
                 with st.spinner("ダウンロード中..."):
+                    st.info(f"📁 一時フォルダ: {temp_dir}")
                     file_path = download_stream(selected_stream, temp_dir)
                     
                     if file_path:
                         st.success("✅ ダウンロード完了！")
+                        st.info(f"📁 ファイルパス: {file_path}")
                         
                         with open(file_path, "rb") as file:
                             if "音声のみ" in selected_option:
@@ -211,6 +267,9 @@ if url:
     
     except Exception as e:
         st.error(f"❌ エラーが発生しました: {str(e)}")
+        st.error(f"🔍 エラータイプ: {type(e).__name__}")
+        import traceback
+        st.error(f"🔍 詳細エラー: {traceback.format_exc()}")
         st.info("💡 別のURLを試すか、しばらく時間をおいてから再試行してください")
 
 # フッター
