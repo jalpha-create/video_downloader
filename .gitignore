@@ -3,6 +3,23 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Streamlit specific
+.streamlit/secrets.toml
+
+# Temporary files for video processing
+temp_audio
+temp_video
+*.tmp
+*.temp
+
+# Downloaded videos and audio files
+downloads/
+*.mp4
+*.mp3
+*.wav
+*.avi
+*.mkv
+
 # C extensions
 *.so
 
